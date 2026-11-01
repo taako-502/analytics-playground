@@ -36,7 +36,7 @@ MetabaseはDocker内から接続するため、ホストには `analytics`、ポ
 
 ### ダッシュボードの自動作成
 
-ローカルにGo 1.23以降が必要です。リポジトリのルートで次を実行します。以前の `python3 scripts/metabase_dashboard.py` はGo版に置き換わっています。
+ローカルにGo 1.27以降が必要です。リポジトリのルートで次を実行します。以前の `python3 scripts/metabase_dashboard.py` はGo版に置き換わっています。
 
 ```sh
 go run ./cmd/metabase-dashboard
@@ -85,7 +85,7 @@ Metabase 管理者メールアドレス: admin@example.com
 
 `mart.monthly_customer_activity` のリピート率は、同じ月に2回以上注文した顧客数を、その月の購入顧客数で割ったものです。処理履歴はレイクボリュームの `runs.json` に最新100件を保存します。
 
-WebサーバーをDocker外で起動する場合は、Go 1.23以降と `psql` を用意し、`docker compose up -d source analytics` でDBを起動してから、リポジトリのルートで `go run ./cmd/server` を実行します。`web/` と `sql/` を相対パスで参照するため、作業ディレクトリはルートにしてください。Dockerのappサービスが起動中の場合は、先に `docker compose stop app` で8080番ポートを空けます。
+WebサーバーをDocker外で起動する場合は、Go 1.27以降と `psql` を用意し、`docker compose up -d source analytics` でDBを起動してから、リポジトリのルートで `go run ./cmd/server` を実行します。`web/` と `sql/` を相対パスで参照するため、作業ディレクトリはルートにしてください。Dockerのappサービスが起動中の場合は、先に `docker compose stop app` で8080番ポートを空けます。
 
 ## Goのテスト
 
