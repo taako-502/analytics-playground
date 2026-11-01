@@ -16,7 +16,52 @@ http://localhost:8080 を開き、「すべて実行」を押します。画面�
 
 ## BI
 
-http://localhost:3000 でMetabaseの初期設定を行い、PostgreSQLデータベースを追加します。ホスト `analytics`、ポート `5432`、DB `analytics`、ユーザー `postgres`、パスワード `playground`。`mart.daily_sales`、`mart.daily_product_sales` を使い、質問とダッシュボードを作成します。初回設定とDB接続後、`go run ./cmd/metabase-dashboard` を実行すると3つのグラフからなるダッシュボードを作成できます。ログイン後に表示される分析DBのIDを選択してください。再実行すると新しいダッシュボードが作成されます。
+### 初期設定と分析DBの接続
+
+1. http://localhost:8080 で「すべて実行」を押し、マートまでの処理を完了させます。
+2. http://localhost:3000 を開き、Metabaseの初期設定で管理者アカウントを作成します。ローカル学習用のサンプルとして、メールアドレスは `admin@example.com`、パスワードは `Playground123!` を入力します。後述のダッシュボード作成時にも同じ値を使用します。
+3. MetabaseにPostgreSQLデータベースを追加し、次の接続情報を入力します。初期設定を済ませている場合は、管理者設定のデータベース追加から登録します。
+
+| 項目 | 入力値 |
+| --- | --- |
+| データベースの種類 | PostgreSQL |
+| 表示名 | `analytics` |
+| ホスト | `analytics` |
+| ポート | `5432` |
+| データベース名 | `analytics` |
+| ユーザー名 | `postgres` |
+| パスワード | `playground` |
+
+MetabaseはDocker内から接続するため、ホストには `analytics`、ポートには `5432` を指定します。
+
+### ダッシュボードの自動作成
+
+ローカルにGo 1.23以降が必要です。リポジトリのルートで次を実行します。以前の `python3 scripts/metabase_dashboard.py` はGo版に置き換わっています。
+
+```sh
+go run ./cmd/metabase-dashboard
+```
+
+入力の流れは次のとおりです。
+
+1. **Metabase 管理者メールアドレス**: 初期設定で作成した管理者のメールアドレス（サンプル: `admin@example.com`）を入力します。
+2. **パスワード**: その管理者のパスワード（サンプル: `Playground123!`）を入力します。入力中は文字が表示されません。DB接続用の `playground` とは別の認証情報です。
+3. **分析DBのID**: ログイン後に表示される一覧から、上記の分析DBとして登録した接続の左側の数字を入力します。
+
+例えば、表示名を `analytics` として登録したDBが `2: analytics` と表示された場合は、`2` を入力してEnterを押します。
+
+```text
+Metabase 管理者メールアドレス: admin@example.com
+パスワード:
+2: analytics
+分析DBのID: 2
+```
+
+`2` はMetabaseが割り当てたDBのID、`analytics` は登録時に付けた表示名です。IDは環境によって異なるため、実際に表示された番号を指定してください。複数の候補がある場合は、分析DB `analytics` に接続しているものを選びます。
+
+完了すると `作成しました: http://localhost:3000/dashboard/…` と表示されます。そのURLを開くと、日別売上と返品・商品別売上・月別リピート率の3つのグラフを確認できます。再実行すると別のダッシュボードが作成されます。
+
+手動で質問やダッシュボードを作成する場合は、`mart.daily_sales`、`mart.daily_product_sales`、`mart.monthly_customer_activity` を使用します。
 
 ## 制約
 
