@@ -6,3 +6,5 @@ CREATE TABLE dwh.dim_customers (id bigint PRIMARY KEY, name text NOT NULL);
 CREATE TABLE dwh.dim_products (id bigint PRIMARY KEY, name text NOT NULL, category text NOT NULL);
 CREATE TABLE dwh.fact_order_items (id bigint PRIMARY KEY, order_id bigint NOT NULL, customer_id bigint NOT NULL, product_id bigint NOT NULL, quantity integer NOT NULL, unit_price integer NOT NULL, paid_at timestamptz NOT NULL);
 CREATE TABLE dwh.fact_returns (id bigint PRIMARY KEY, order_item_id bigint NOT NULL, quantity integer NOT NULL, returned_at timestamptz NOT NULL);
+CREATE TABLE mart.daily_sales (day date PRIMARY KEY, gross_sales bigint NOT NULL, returns bigint NOT NULL, net_sales bigint NOT NULL);
+CREATE TABLE mart.daily_product_sales (day date NOT NULL, product_id bigint NOT NULL, product_name text NOT NULL, category text NOT NULL, quantity bigint NOT NULL, gross_sales bigint NOT NULL, PRIMARY KEY(day,product_id));

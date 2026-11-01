@@ -8,6 +8,10 @@ services:
     volumes:
       - source-data:/var/lib/postgresql/data
       - ./sql/source.sql:/docker-entrypoint-initdb.d/01-source.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d source"]
+      interval: 3s
+      retries: 20
   analytics:
     image: postgres:16
     environment:
@@ -17,8 +21,23 @@ services:
     volumes:
       - analytics-data:/var/lib/postgresql/data
       - ./sql/analytics.sql:/docker-entrypoint-initdb.d/01-analytics.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d analytics"]
+      interval: 3s
+      retries: 20
+  app:
+    build: .
+    ports: ["8080:8080"]
+    environment:
+      SOURCE_URL: postgres://postgres:playground@source:5432/source
+      ANALYTICS_URL: postgres://postgres:playground@analytics:5432/analytics
+      LAKE_DIR: /lake
+    volumes: ["lake-data:/lake"]
+    depends_on:
+      source: {condition: service_healthy}
+      analytics: {condition: service_healthy}
   metabase:
-    image: metabase/metabase:latest
+    image: metabase/metabase:v0.53.8
     ports: ["3000:3000"]
     volumes: ["metabase-data:/metabase-data"]
     environment:
@@ -26,4 +45,5 @@ services:
 volumes:
   source-data:
   analytics-data:
+  lake-data:
   metabase-data:
