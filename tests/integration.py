@@ -37,8 +37,27 @@ assert get('/api/status')['marts'] == s['marts'], 'mart changed before processin
 post('/api/run?stage=all')
 updated = get('/api/status')['marts']
 assert sum(x['returns'] for x in updated) == 1700, updated
+# Compare snapshot-based incremental updates, including changed and deleted records.
+import subprocess
+
+def db(query):
+    subprocess.run(['docker','compose','exec','-T','source','psql','-U','postgres','-d','source','-v','ON_ERROR_STOP=1','-c',query],check=True,stdout=subprocess.DEVNULL)
+
+db("UPDATE order_items SET unit_price=800 WHERE id=1; DELETE FROM returns WHERE id=1")
+post('/api/run?stage=extract')
+post('/api/run?stage=load-diff')
+post('/api/run?stage=load-diff')
+post('/api/run?stage=warehouse')
+post('/api/run?stage=marts-range&from=2026-10-01&to=2026-10-03')
+s = get('/api/status')
+assert get('/api/trace?order_id=1')['warehouse'][0]['unit_price'] == 800
+sales = {x['day']:x for x in s['marts']}
+assert sales['2026-10-01']['gross_sales'] >= 1600, sales
+assert not sales.get('2026-10-03',{}).get('returns'), sales
+print('Incremental and range checks passed')
+
 post('/api/run?stage=seed')
 post('/api/run?stage=all')
 s = get('/api/status')
 assert s['monthly'], s
-print('End-to-end pipeline checks passed')
+print('Seed checks passed')

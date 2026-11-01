@@ -101,13 +101,22 @@ func latest() (string, error) {
 	}
 	return names[len(names)-1], nil
 }
-func load() error {
+func load() error { return loadMode(false) }
+func loadMode(diff bool) error {
 	id, e := latest()
 	if e != nil {
 		return e
 	}
 	var q strings.Builder
-	q.WriteString("BEGIN; TRUNCATE raw.records;\n")
+	if diff {
+		q.WriteString("BEGIN; CREATE TEMP TABLE incoming (LIKE raw.records) ON COMMIT DROP;\n")
+	} else {
+		q.WriteString("BEGIN; TRUNCATE raw.records;\n")
+	}
+	target := "raw.records"
+	if diff {
+		target = "incoming"
+	}
 	for _, t := range tables {
 		b, e := os.ReadFile(filepath.Join(lake(), id, t+".json"))
 		if e != nil {
@@ -119,8 +128,15 @@ func load() error {
 		}
 		for _, row := range rows {
 			s := strings.ReplaceAll(string(row), "'", "''")
-			fmt.Fprintf(&q, "INSERT INTO raw.records VALUES ('%s','%s','%s'::jsonb);\n", id, t, s)
+			fmt.Fprintf(&q, "INSERT INTO %s VALUES ('%s','%s','%s'::jsonb);\n", target, id, t, s)
 		}
+	}
+	if diff {
+		q.WriteString(`
+DELETE FROM raw.records r WHERE NOT EXISTS (SELECT 1 FROM incoming i WHERE i.source_table=r.source_table AND i.payload->>'id'=r.payload->>'id');
+DELETE FROM raw.records r USING incoming i WHERE i.source_table=r.source_table AND i.payload->>'id'=r.payload->>'id' AND i.payload IS DISTINCT FROM r.payload;
+INSERT INTO raw.records SELECT i.* FROM incoming i WHERE NOT EXISTS (SELECT 1 FROM raw.records r WHERE r.source_table=i.source_table AND r.payload->>'id'=i.payload->>'id');
+`)
 	}
 	q.WriteString("COMMIT;")
 	_, e = sql(analytics(), q.String())
@@ -147,6 +163,8 @@ func pipeline(stage string) error {
 		return extract()
 	case "load":
 		return load()
+	case "load-diff":
+		return loadMode(true)
 	case "warehouse":
 		return runSQL("sql/warehouse.sql")
 	case "marts":
@@ -221,7 +239,12 @@ func main() {
 		defer mu.Unlock()
 		stage := r.URL.Query().Get("stage")
 		started := time.Now().UTC()
-		e := pipeline(stage)
+		var e error
+		if stage == "marts-range" {
+			e = runRange(r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+		} else {
+			e = pipeline(stage)
+		}
 		recordRun(stage, started, e)
 		if e != nil {
 			http.Error(w, e.Error(), 500)
@@ -323,4 +346,30 @@ func trace(id int64) (map[string]any, error) {
 		}
 	}
 	return result, nil
+}
+
+// runRange refreshes whole days and every intersecting month, atomically.
+func runRange(from, to string) error {
+	a, e := time.Parse("2006-01-02", from)
+	if e != nil {
+		return errors.New("開始日が不正です")
+	}
+	b, e := time.Parse("2006-01-02", to)
+	if e != nil || b.Before(a) {
+		return errors.New("終了日が不正です")
+	}
+	data, e := os.ReadFile("sql/marts.sql")
+	if e != nil {
+		return e
+	}
+	q := string(data)
+	q = strings.Replace(q, "TRUNCATE mart.daily_sales,mart.daily_product_sales;", fmt.Sprintf("DELETE FROM mart.daily_sales WHERE day BETWEEN '%s' AND '%s'; DELETE FROM mart.daily_product_sales WHERE day BETWEEN '%s' AND '%s';", from, to, from, to), 1)
+	q = strings.Replace(q, "FROM events GROUP BY sales_day", fmt.Sprintf("FROM events WHERE sales_day BETWEEN '%s' AND '%s' GROUP BY sales_day", from, to), 1)
+	q = strings.Replace(q, "GROUP BY 1,2,3,4;", fmt.Sprintf("WHERE (i.paid_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN '%s' AND '%s' GROUP BY 1,2,3,4;", from, to), 1)
+	monthStart := a.Format("2006-01") + "-01"
+	monthEnd := b.Format("2006-01") + "-01"
+	q = strings.Replace(q, "TRUNCATE mart.monthly_customer_activity;", fmt.Sprintf("DELETE FROM mart.monthly_customer_activity WHERE month BETWEEN '%s' AND '%s';", monthStart, monthEnd), 1)
+	q = strings.Replace(q, "FROM dwh.fact_order_items GROUP BY 1,2", fmt.Sprintf("FROM dwh.fact_order_items WHERE date_trunc('month',paid_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN '%s' AND '%s' GROUP BY 1,2", monthStart, monthEnd), 1)
+	_, e = sql(analytics(), q)
+	return e
 }

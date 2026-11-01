@@ -16,11 +16,13 @@ http://localhost:8080 を開き、「すべて実行」を押します。画面�
 
 ## BI
 
-http://localhost:3000 でMetabaseの初期設定を行い、PostgreSQLデータベースを追加します。ホスト `analytics`、ポート `5432`、DB `analytics`、ユーザー `postgres`、パスワード `playground`。`mart.daily_sales`、`mart.daily_product_sales` を使い、質問とダッシュボードを作成します。ダッシュボードは自動作成されません。
+http://localhost:3000 でMetabaseの初期設定を行い、PostgreSQLデータベースを追加します。ホスト `analytics`、ポート `5432`、DB `analytics`、ユーザー `postgres`、パスワード `playground`。`mart.daily_sales`、`mart.daily_product_sales` を使い、質問とダッシュボードを作成します。初回設定とDB接続後、`python3 scripts/metabase_dashboard.py` を実行すると3つのグラフからなるダッシュボードを作成できます。ログイン後に表示される分析DBのIDを選択してください。再実行すると新しいダッシュボードが作成されます。
 
 ## 制約
 
-学習用の全件スナップショット方式です。レイクからの読み込みは最新バッチのみで、過去バッチの指定、差分更新、実行履歴、認証、大量データ向けの効率化は未実装です。データとMetabaseの設定はDockerボリュームに保存されます。`docker compose down -v` はデータを削除します。
+業務DBからの抽出は全件スナップショット方式です。rawの差分更新は、最新スナップショットと既存rawをIDで比較し、変更・削除を反映します。変更されない行のバッチIDは以前の値を保ちます。複数回実行しても同じ結果になります。差分更新後はDWHを更新してください。過去バッチ指定、業務DBからの差分抽出、認証、大量データ向けの効率化は未実装です。データとMetabaseの設定はDockerボリュームに保存されます。`docker compose down -v` はデータを削除します。
+
+期間指定の再集計は開始日・終了日を含む日本時間の日付で指定します。日別マートは指定日だけを、月別マートは指定日に重なる月全体を再集計します。先にDWHを最新化してください。
 
 ## 構成
 
