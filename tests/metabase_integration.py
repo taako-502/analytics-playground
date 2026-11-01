@@ -19,5 +19,8 @@ db=m.request('POST','/api/database',{'name':'Analytics','engine':'postgres','det
 with patch.object(builtins,'input',side_effect=['admin@example.com',str(db['id'])]), patch.object(m.getpass,'getpass',return_value=admin['password']):
     m.main()
 dashboards=m.request('GET','/api/dashboard',session=session)
-assert any(d['name']=='EC売上分析' for d in dashboards), dashboards
-print('Metabase dashboard created')
+dash=next(d for d in dashboards if d['name']=='EC売上分析')
+full=m.request('GET',f"/api/dashboard/{dash['id']}",session=session)
+cards=full.get('dashcards',full.get('ordered_cards',[]))
+assert len(cards)==3, full
+print('Metabase dashboard and three cards created')
