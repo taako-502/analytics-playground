@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -135,6 +136,13 @@ func runSQL(path string) error {
 }
 func pipeline(stage string) error {
 	switch stage {
+	case "seed":
+		b, e := os.ReadFile("sql/seed.sql")
+		if e != nil {
+			return e
+		}
+		_, e = sql(source(), string(b))
+		return e
 	case "extract":
 		return extract()
 	case "load":
@@ -165,7 +173,13 @@ func queryJSON(db, q string) (any, error) {
 func status() (map[string]any, error) {
 	id, _ := latest()
 	out := map[string]any{"batch": id}
-	queries := map[string]struct{ db, q string }{"source": {source(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT o.id,o.customer_id,o.paid_at,i.product_id,i.quantity,i.unit_price FROM orders o JOIN order_items i ON i.order_id=o.id ORDER BY o.id LIMIT 30)t`}, "raw": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT batch_id,source_table,payload FROM raw.records ORDER BY source_table LIMIT 30)t`}, "warehouse": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM dwh.fact_order_items ORDER BY id LIMIT 30)t`}, "marts": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.daily_sales ORDER BY day LIMIT 30)t`}, "products": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.daily_product_sales ORDER BY day LIMIT 30)t`}}
+	if b, e := os.ReadFile(filepath.Join(lake(), "runs.json")); e == nil {
+		var v any
+		if json.Unmarshal(b, &v) == nil {
+			out["history"] = v
+		}
+	}
+	queries := map[string]struct{ db, q string }{"source": {source(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT o.id,o.customer_id,o.paid_at,i.product_id,i.quantity,i.unit_price FROM orders o JOIN order_items i ON i.order_id=o.id ORDER BY o.id LIMIT 30)t`}, "raw": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT batch_id,source_table,payload FROM raw.records ORDER BY source_table LIMIT 30)t`}, "warehouse": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM dwh.fact_order_items ORDER BY id LIMIT 30)t`}, "marts": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.daily_sales ORDER BY day LIMIT 30)t`}, "monthly": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.monthly_customer_activity ORDER BY month LIMIT 30)t`}, "products": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.daily_product_sales ORDER BY day LIMIT 30)t`}}
 	for k, v := range queries {
 		x, e := queryJSON(v.db, v.q)
 		if e != nil {
@@ -180,6 +194,9 @@ func status() (map[string]any, error) {
 		if e == nil {
 			var x any
 			if json.Unmarshal(b, &x) == nil {
+				if rows, ok := x.([]any); ok && len(rows) > 30 {
+					x = rows[:30]
+				}
 				out["lake"] = x
 			}
 		}
@@ -202,11 +219,31 @@ func main() {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if e := pipeline(r.URL.Query().Get("stage")); e != nil {
+		stage := r.URL.Query().Get("stage")
+		started := time.Now().UTC()
+		e := pipeline(stage)
+		recordRun(stage, started, e)
+		if e != nil {
 			http.Error(w, e.Error(), 500)
 			return
 		}
 		io.WriteString(w, "ok")
+	})
+	http.HandleFunc("/api/trace", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		id, e := strconv.ParseInt(r.URL.Query().Get("order_id"), 10, 64)
+		if e != nil || id < 1 {
+			http.Error(w, "有効な注文IDを指定してください", 400)
+			return
+		}
+		data, e := trace(id)
+		if e != nil {
+			http.Error(w, e.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(data)
 	})
 	http.HandleFunc("/api/return", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -224,4 +261,66 @@ func main() {
 	})
 	log.Println("http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+// recordRun keeps a bounded history independent of database availability.
+func recordRun(stage string, started time.Time, runErr error) {
+	if os.MkdirAll(lake(), 0755) != nil {
+		return
+	}
+	path := filepath.Join(lake(), "runs.json")
+	type entry struct {
+		Stage    string `json:"stage"`
+		Started  string `json:"started"`
+		Finished string `json:"finished"`
+		Error    string `json:"error,omitempty"`
+	}
+	var history []entry
+	b, _ := os.ReadFile(path)
+	_ = json.Unmarshal(b, &history)
+	item := entry{Stage: stage, Started: started.Format(time.RFC3339), Finished: time.Now().UTC().Format(time.RFC3339)}
+	if runErr != nil {
+		item.Error = runErr.Error()
+	}
+	history = append(history, item)
+	if len(history) > 100 {
+		history = history[len(history)-100:]
+	}
+	b, _ = json.Marshal(history)
+	_ = os.WriteFile(path, b, 0644)
+}
+func trace(id int64) (map[string]any, error) {
+	result := map[string]any{"order_id": id}
+	order := strconv.FormatInt(id, 10)
+	queries := map[string]struct{ db, q string }{
+		"source":    {source(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT o.id,o.customer_id,o.paid_at,i.id item_id,i.product_id,i.quantity,i.unit_price FROM orders o JOIN order_items i ON i.order_id=o.id WHERE o.id=` + order + `) t`},
+		"raw":       {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT batch_id,source_table,payload FROM raw.records WHERE (source_table='orders' AND payload->>'id'='` + order + `') OR (source_table='order_items' AND payload->>'order_id'='` + order + `')) t`},
+		"warehouse": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM dwh.fact_order_items WHERE order_id=` + order + `) t`},
+		"mart":      {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT m.* FROM mart.daily_sales m WHERE m.day IN (SELECT (paid_at AT TIME ZONE 'Asia/Tokyo')::date FROM dwh.fact_order_items WHERE order_id=` + order + `)) t`},
+	}
+	for k, q := range queries {
+		x, e := queryJSON(q.db, q.q)
+		if e != nil {
+			return nil, e
+		}
+		result[k] = x
+	}
+	batch, e := latest()
+	if e == nil {
+		b, e := os.ReadFile(filepath.Join(lake(), batch, "orders.json"))
+		if e == nil {
+			var rows []map[string]any
+			if json.Unmarshal(b, &rows) == nil {
+				var found []map[string]any
+				for _, r := range rows {
+					if n, ok := r["id"].(float64); ok && int64(n) == id {
+						found = append(found, r)
+					}
+				}
+				result["lake"] = found
+				result["batch"] = batch
+			}
+		}
+	}
+	return result, nil
 }
