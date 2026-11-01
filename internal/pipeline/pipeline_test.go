@@ -1,4 +1,4 @@
-package main
+package pipeline
 
 import (
 	"encoding/json"
@@ -49,7 +49,7 @@ func TestHistoryDoesNotOverwriteCorruption(t *testing.T) {
 }
 func TestHistoryRoundTrip(t *testing.T) {
 	t.Setenv("LAKE_DIR", t.TempDir())
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if e := recordRun("all", time.Now(), nil); e != nil {
 			t.Fatal(e)
 		}

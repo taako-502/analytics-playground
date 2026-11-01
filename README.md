@@ -71,7 +71,10 @@ Metabase 管理者メールアドレス: admin@example.com
 
 ## 構成
 
-- `main.go`: Go HTTPサーバー、抽出・ロード・処理実行。PostgreSQLにはpsql経由で接続。
+- `cmd/server/`: Webサーバーの実行入口とHTTP API。
+- `cmd/metabase-dashboard/`: Metabaseダッシュボード作成コマンド。
+- `internal/pipeline/`: 抽出・ロード・集計、各層の参照、実行履歴。PostgreSQLにはpsql経由で接続。
+- `internal/metabase/`: Metabase APIとの通信処理。
 - `sql/warehouse.sql`: rawから分析用明細へ変換。
 - `sql/marts.sql`: DWHから日別売上へ集計。
 - `web/`: 各層の表示と手動実行画面。
@@ -81,6 +84,8 @@ Metabase 管理者メールアドレス: admin@example.com
 「サンプルデータを追加」で1,000顧客、20商品、約1万注文を作成します。既存IDは上書きせず、繰り返し実行できます。その後に抽出から実行してください。注文IDを入力すると各層を追跡できます。マートは日別集計なので、その日の他の注文も合算されます。
 
 `mart.monthly_customer_activity` のリピート率は、同じ月に2回以上注文した顧客数を、その月の購入顧客数で割ったものです。処理履歴はレイクボリュームの `runs.json` に最新100件を保存します。
+
+WebサーバーをDocker外で起動する場合は、Go 1.23以降と `psql` を用意し、`docker compose up -d source analytics` でDBを起動してから、リポジトリのルートで `go run ./cmd/server` を実行します。`web/` と `sql/` を相対パスで参照するため、作業ディレクトリはルートにしてください。Dockerのappサービスが起動中の場合は、先に `docker compose stop app` で8080番ポートを空けます。
 
 ## Goのテスト
 
