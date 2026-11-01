@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS mart.monthly_customer_activity (month date PRIMARY KE
 TRUNCATE mart.monthly_customer_activity;
 INSERT INTO mart.monthly_customer_activity
 WITH customer_months AS (
- SELECT date_trunc('month', paid_at AT TIME ZONE 'Asia/Tokyo')::date month, customer_id, count(DISTINCT order_id) orders
+ SELECT date_trunc('month', paid_at AT TIME ZONE 'Asia/Tokyo')::date AS activity_month, customer_id, count(DISTINCT order_id) orders
  FROM dwh.fact_order_items GROUP BY 1,2
 )
-SELECT month,count(*),count(*) FILTER (WHERE orders >= 2),round((count(*) FILTER (WHERE orders >= 2))::numeric / NULLIF(count(*),0),4) FROM customer_months GROUP BY month;
+SELECT activity_month,count(*),count(*) FILTER (WHERE orders >= 2),round((count(*) FILTER (WHERE orders >= 2))::numeric / NULLIF(count(*),0),4) FROM customer_months GROUP BY activity_month;
 COMMIT;
