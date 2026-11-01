@@ -16,7 +16,7 @@ http://localhost:8080 を開き、「すべて実行」を押します。画面�
 
 ## BI
 
-http://localhost:3000 でMetabaseの初期設定を行い、PostgreSQLデータベースを追加します。ホスト `analytics`、ポート `5432`、DB `analytics`、ユーザー `postgres`、パスワード `playground`。`mart.daily_sales`、`mart.daily_product_sales` を使い、質問とダッシュボードを作成します。初回設定とDB接続後、`python3 scripts/metabase_dashboard.py` を実行すると3つのグラフからなるダッシュボードを作成できます。ログイン後に表示される分析DBのIDを選択してください。再実行すると新しいダッシュボードが作成されます。
+http://localhost:3000 でMetabaseの初期設定を行い、PostgreSQLデータベースを追加します。ホスト `analytics`、ポート `5432`、DB `analytics`、ユーザー `postgres`、パスワード `playground`。`mart.daily_sales`、`mart.daily_product_sales` を使い、質問とダッシュボードを作成します。初回設定とDB接続後、`go run ./cmd/metabase-dashboard` を実行すると3つのグラフからなるダッシュボードを作成できます。ログイン後に表示される分析DBのIDを選択してください。再実行すると新しいダッシュボードが作成されます。
 
 ## 制約
 
@@ -36,3 +36,7 @@ http://localhost:3000 でMetabaseの初期設定を行い、PostgreSQLデータ�
 「サンプルデータを追加」で1,000顧客、20商品、約1万注文を作成します。既存IDは上書きせず、繰り返し実行できます。その後に抽出から実行してください。注文IDを入力すると各層を追跡できます。マートは日別集計なので、その日の他の注文も合算されます。
 
 `mart.monthly_customer_activity` のリピート率は、同じ月に2回以上注文した顧客数を、その月の購入顧客数で割ったものです。処理履歴はレイクボリュームの `runs.json` に最新100件を保存します。
+
+## Goのテスト
+
+`go test ./...` は通常テストです。結合テストは新規のDockerボリュームで、`go test -tags=integration ./tests -run ^TestPipeline$ -v` を実行します。Metabaseの初期化テストは `-run ^TestMetabase$` で別途実行します。既存データには実行しないでください。Pythonは不要です。対話ツールのパスワード非表示入力にはmacOS/Linuxのsttyを使用します。
