@@ -69,6 +69,12 @@ func TestPipeline(t *testing.T) {
 	for _, row := range sales(get("/api/status")) {
 		total += row["returns"].(float64)
 	}
+	trace = get("/api/trace?order_id=2")
+	for _, k := range []string{"source_returns", "raw_returns", "dwh_returns", "lake_returns"} {
+		if len(trace[k].([]any)) != 1 {
+			t.Fatal(k, trace)
+		}
+	}
 	if total != 1700 {
 		t.Fatal(total)
 	}
@@ -98,6 +104,9 @@ func TestPipeline(t *testing.T) {
 	}
 }
 func TestMetabase(t *testing.T) {
+	app := &metabase.Client{URL: "http://localhost:8080"}
+	wait(t, app, "/api/status", 60)
+	call(t, app, "POST", "/api/run?stage=all", nil, nil)
 	c := &metabase.Client{URL: "http://localhost:3000"}
 	wait(t, c, "/api/health", 120)
 	var props obj
@@ -121,5 +130,17 @@ func TestMetabase(t *testing.T) {
 	}
 	if len(cards.([]any)) != 3 {
 		t.Fatal(full)
+	}
+	for _, v := range cards.([]any) {
+		card := v.(map[string]any)
+		var result obj
+		call(t, c, "POST", fmt.Sprintf("/api/card/%.0f/query", card["card_id"].(float64)), obj{}, &result)
+		if result["status"] != "completed" {
+			t.Fatal(result)
+		}
+		data := result["data"].(map[string]any)
+		if len(data["rows"].([]any)) == 0 {
+			t.Fatal("empty card result", card)
+		}
 	}
 }

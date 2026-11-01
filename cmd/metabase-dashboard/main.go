@@ -24,7 +24,7 @@ func password(r *bufio.Reader) (string, error) {
 		fmt.Println()
 	}()
 	s, e := r.ReadString('\n')
-	return strings.TrimSpace(s), e
+	return strings.TrimSuffix(strings.TrimSuffix(s, "\n"), "\r"), e
 }
 func run() error {
 	r := bufio.NewReader(os.Stdin)

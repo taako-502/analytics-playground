@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_PASSWORD: playground
       POSTGRES_DB: source
-    ports: ["15432:5432"]
+    ports: ["127.0.0.1:15432:5432"]
     volumes:
       - source-data:/var/lib/postgresql/data
       - ./sql/source.sql:/docker-entrypoint-initdb.d/01-source.sql:ro
@@ -17,7 +17,7 @@ services:
     environment:
       POSTGRES_PASSWORD: playground
       POSTGRES_DB: analytics
-    ports: ["15433:5432"]
+    ports: ["127.0.0.1:15433:5432"]
     volumes:
       - analytics-data:/var/lib/postgresql/data
       - ./sql/analytics.sql:/docker-entrypoint-initdb.d/01-analytics.sql:ro
@@ -27,7 +27,7 @@ services:
       retries: 20
   app:
     build: .
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:8080:8080"]
     environment:
       SOURCE_URL: postgres://postgres:playground@source:5432/source
       ANALYTICS_URL: postgres://postgres:playground@analytics:5432/analytics
@@ -38,7 +38,7 @@ services:
       analytics: {condition: service_healthy}
   metabase:
     image: metabase/metabase:v0.53.8
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     volumes: ["metabase-data:/metabase-data"]
     environment:
       MB_DB_FILE: /metabase-data/metabase.db

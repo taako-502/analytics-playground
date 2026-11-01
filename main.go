@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,11 +37,15 @@ func analytics() string {
 }
 func lake() string { return env("LAKE_DIR", "lake") }
 func sql(db, query string) (string, error) {
-	cmd := exec.Command("psql", db, "-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "psql", db, "-X", "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1")
 	cmd.Stdin = strings.NewReader(query)
-	b, e := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	b, e := cmd.Output()
 	if e != nil {
-		return "", fmt.Errorf("database: %s: %w", strings.TrimSpace(string(b)), e)
+		return "", fmt.Errorf("database: %s: %w", strings.TrimSpace(stderr.String()), e)
 	}
 	return strings.TrimSpace(string(b)), nil
 }
@@ -190,14 +196,14 @@ func queryJSON(db, q string) (any, error) {
 }
 func status() (map[string]any, error) {
 	id, _ := latest()
-	out := map[string]any{"batch": id}
+	out := map[string]any{"batch": id, "preview_note": "業務DB・raw・DWH・レイクは最大30行。マートは新しい日付から最大1000行。全件はMetabaseで確認できます。"}
 	if b, e := os.ReadFile(filepath.Join(lake(), "runs.json")); e == nil {
 		var v any
 		if json.Unmarshal(b, &v) == nil {
 			out["history"] = v
 		}
 	}
-	queries := map[string]struct{ db, q string }{"source": {source(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT o.id,o.customer_id,o.paid_at,i.product_id,i.quantity,i.unit_price FROM orders o JOIN order_items i ON i.order_id=o.id ORDER BY o.id LIMIT 30)t`}, "raw": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT batch_id,source_table,payload FROM raw.records ORDER BY source_table LIMIT 30)t`}, "warehouse": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM dwh.fact_order_items ORDER BY id LIMIT 30)t`}, "marts": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.daily_sales ORDER BY day LIMIT 30)t`}, "monthly": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.monthly_customer_activity ORDER BY month LIMIT 30)t`}, "products": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.daily_product_sales ORDER BY day LIMIT 30)t`}}
+	queries := map[string]struct{ db, q string }{"source": {source(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT o.id,o.customer_id,o.paid_at,i.product_id,i.quantity,i.unit_price FROM orders o JOIN order_items i ON i.order_id=o.id ORDER BY o.id LIMIT 30)t`}, "raw": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT batch_id,source_table,payload FROM raw.records ORDER BY source_table LIMIT 30)t`}, "warehouse": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM dwh.fact_order_items ORDER BY id LIMIT 30)t`}, "marts": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.daily_sales ORDER BY day DESC LIMIT 1000)t`}, "monthly": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.monthly_customer_activity ORDER BY month DESC LIMIT 1000)t`}, "products": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.daily_product_sales ORDER BY day DESC LIMIT 1000)t`}}
 	for k, v := range queries {
 		x, e := queryJSON(v.db, v.q)
 		if e != nil {
@@ -224,8 +230,6 @@ func status() (map[string]any, error) {
 func main() {
 	http.Handle("/", http.FileServer(http.Dir("web")))
 	http.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		x, _ := status()
 		json.NewEncoder(w).Encode(x)
@@ -245,7 +249,9 @@ func main() {
 		} else {
 			e = pipeline(stage)
 		}
-		recordRun(stage, started, e)
+		if historyErr := recordRun(stage, started, e); historyErr != nil {
+			e = errors.Join(e, fmt.Errorf("履歴保存: %w", historyErr))
+		}
 		if e != nil {
 			http.Error(w, e.Error(), 500)
 			return
@@ -253,8 +259,6 @@ func main() {
 		io.WriteString(w, "ok")
 	})
 	http.HandleFunc("/api/trace", func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
 		id, e := strconv.ParseInt(r.URL.Query().Get("order_id"), 10, 64)
 		if e != nil || id < 1 {
 			http.Error(w, "有効な注文IDを指定してください", 400)
@@ -287,9 +291,9 @@ func main() {
 }
 
 // recordRun keeps a bounded history independent of database availability.
-func recordRun(stage string, started time.Time, runErr error) {
-	if os.MkdirAll(lake(), 0755) != nil {
-		return
+func recordRun(stage string, started time.Time, runErr error) error {
+	if e := os.MkdirAll(lake(), 0755); e != nil {
+		return e
 	}
 	path := filepath.Join(lake(), "runs.json")
 	type entry struct {
@@ -299,8 +303,15 @@ func recordRun(stage string, started time.Time, runErr error) {
 		Error    string `json:"error,omitempty"`
 	}
 	var history []entry
-	b, _ := os.ReadFile(path)
-	_ = json.Unmarshal(b, &history)
+	b, readErr := os.ReadFile(path)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return readErr
+	}
+	if readErr == nil {
+		if e := json.Unmarshal(b, &history); e != nil {
+			return e
+		}
+	}
 	item := entry{Stage: stage, Started: started.Format(time.RFC3339), Finished: time.Now().UTC().Format(time.RFC3339)}
 	if runErr != nil {
 		item.Error = runErr.Error()
@@ -309,8 +320,23 @@ func recordRun(stage string, started time.Time, runErr error) {
 	if len(history) > 100 {
 		history = history[len(history)-100:]
 	}
-	b, _ = json.Marshal(history)
-	_ = os.WriteFile(path, b, 0644)
+	b, e := json.Marshal(history)
+	if e != nil {
+		return e
+	}
+	f, e := os.CreateTemp(lake(), ".history-")
+	if e != nil {
+		return e
+	}
+	defer os.Remove(f.Name())
+	if _, e = f.Write(b); e != nil {
+		f.Close()
+		return e
+	}
+	if e = f.Close(); e != nil {
+		return e
+	}
+	return os.Rename(f.Name(), path)
 }
 func trace(id int64) (map[string]any, error) {
 	result := map[string]any{"order_id": id}
@@ -319,8 +345,12 @@ func trace(id int64) (map[string]any, error) {
 		"source":    {source(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT o.id,o.customer_id,o.paid_at,i.id item_id,i.product_id,i.quantity,i.unit_price FROM orders o JOIN order_items i ON i.order_id=o.id WHERE o.id=` + order + `) t`},
 		"raw":       {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT batch_id,source_table,payload FROM raw.records WHERE (source_table='orders' AND payload->>'id'='` + order + `') OR (source_table='order_items' AND payload->>'order_id'='` + order + `')) t`},
 		"warehouse": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM dwh.fact_order_items WHERE order_id=` + order + `) t`},
-		"mart":      {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT m.* FROM mart.daily_sales m WHERE m.day IN (SELECT (paid_at AT TIME ZONE 'Asia/Tokyo')::date FROM dwh.fact_order_items WHERE order_id=` + order + `)) t`},
+		"mart":      {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT m.* FROM mart.daily_sales m WHERE m.day IN (SELECT (paid_at AT TIME ZONE 'Asia/Tokyo')::date FROM dwh.fact_order_items WHERE order_id=` + order + ` UNION SELECT (r.returned_at AT TIME ZONE 'Asia/Tokyo')::date FROM dwh.fact_returns r JOIN dwh.fact_order_items i ON i.id=r.order_item_id WHERE i.order_id=` + order + `)) t`},
 	}
+	queries["source_returns"] = struct{ db, q string }{source(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT r.* FROM returns r JOIN order_items i ON i.id=r.order_item_id WHERE i.order_id=` + order + `)t`}
+	queries["dwh_returns"] = struct{ db, q string }{analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT r.* FROM dwh.fact_returns r JOIN dwh.fact_order_items i ON i.id=r.order_item_id WHERE i.order_id=` + order + `)t`}
+	queries["raw_returns"] = struct{ db, q string }{analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT r.* FROM raw.records r JOIN raw.records i ON i.source_table='order_items' AND i.payload->>'id'=r.payload->>'order_item_id' WHERE r.source_table='returns' AND i.payload->>'order_id'='` + order + `')t`}
+
 	for k, q := range queries {
 		x, e := queryJSON(q.db, q.q)
 		if e != nil {
@@ -345,6 +375,26 @@ func trace(id int64) (map[string]any, error) {
 			}
 		}
 	}
+	if batch != "" {
+		var items, returns []map[string]json.RawMessage
+		ib, ie := os.ReadFile(filepath.Join(lake(), batch, "order_items.json"))
+		rb, re := os.ReadFile(filepath.Join(lake(), batch, "returns.json"))
+		if ie == nil && re == nil && json.Unmarshal(ib, &items) == nil && json.Unmarshal(rb, &returns) == nil {
+			ids := map[string]bool{}
+			for _, i := range items {
+				if string(i["order_id"]) == order {
+					ids[string(i["id"])] = true
+				}
+			}
+			selected := []map[string]json.RawMessage{}
+			for _, r := range returns {
+				if ids[string(r["order_item_id"])] {
+					selected = append(selected, r)
+				}
+			}
+			result["lake_returns"] = selected
+		}
+	}
 	return result, nil
 }
 
@@ -362,14 +412,7 @@ func runRange(from, to string) error {
 	if e != nil {
 		return e
 	}
-	q := string(data)
-	q = strings.Replace(q, "TRUNCATE mart.daily_sales,mart.daily_product_sales;", fmt.Sprintf("DELETE FROM mart.daily_sales WHERE day BETWEEN '%s' AND '%s'; DELETE FROM mart.daily_product_sales WHERE day BETWEEN '%s' AND '%s';", from, to, from, to), 1)
-	q = strings.Replace(q, "FROM events GROUP BY sales_day", fmt.Sprintf("FROM events WHERE sales_day BETWEEN '%s' AND '%s' GROUP BY sales_day", from, to), 1)
-	q = strings.Replace(q, "GROUP BY 1,2,3,4;", fmt.Sprintf("WHERE (i.paid_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN '%s' AND '%s' GROUP BY 1,2,3,4;", from, to), 1)
-	monthStart := a.Format("2006-01") + "-01"
-	monthEnd := b.Format("2006-01") + "-01"
-	q = strings.Replace(q, "TRUNCATE mart.monthly_customer_activity;", fmt.Sprintf("DELETE FROM mart.monthly_customer_activity WHERE month BETWEEN '%s' AND '%s';", monthStart, monthEnd), 1)
-	q = strings.Replace(q, "FROM dwh.fact_order_items GROUP BY 1,2", fmt.Sprintf("FROM dwh.fact_order_items WHERE date_trunc('month',paid_at AT TIME ZONE 'Asia/Tokyo')::date BETWEEN '%s' AND '%s' GROUP BY 1,2", monthStart, monthEnd), 1)
+	q := fmt.Sprintf("SET app.range_from='%s'; SET app.range_to='%s';\n", a.Format("2006-01-02"), b.Format("2006-01-02")) + string(data)
 	_, e = sql(analytics(), q)
 	return e
 }

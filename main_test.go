@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLatestIgnoresIncompleteBatches(t *testing.T) {
@@ -28,5 +30,36 @@ func TestLatestEmpty(t *testing.T) {
 func TestUnknownStage(t *testing.T) {
 	if err := pipeline("invalid"); err == nil {
 		t.Fatal("expected error for unknown stage")
+	}
+}
+
+func TestHistoryDoesNotOverwriteCorruption(t *testing.T) {
+	t.Setenv("LAKE_DIR", t.TempDir())
+	p := filepath.Join(lake(), "runs.json")
+	if e := os.WriteFile(p, []byte("broken"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e := recordRun("all", time.Now(), nil); e == nil {
+		t.Fatal("corruption must be reported")
+	}
+	b, _ := os.ReadFile(p)
+	if string(b) != "broken" {
+		t.Fatal("overwrote history")
+	}
+}
+func TestHistoryRoundTrip(t *testing.T) {
+	t.Setenv("LAKE_DIR", t.TempDir())
+	for i := 0; i < 2; i++ {
+		if e := recordRun("all", time.Now(), nil); e != nil {
+			t.Fatal(e)
+		}
+	}
+	b, e := os.ReadFile(filepath.Join(lake(), "runs.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var entries []any
+	if e = json.Unmarshal(b, &entries); e != nil || len(entries) != 2 {
+		t.Fatal(string(b), e)
 	}
 }

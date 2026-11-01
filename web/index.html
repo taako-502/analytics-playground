@@ -1,4 +1,83 @@
-<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Analytics Playground</title><style>
-:root{font-family:system-ui,sans-serif;color:#18263b;background:#f2f5fa}body{max-width:1200px;margin:auto;padding:32px 20px}h1{font-size:2rem;margin-bottom:4px}.intro{color:#596b81}.panel{background:white;border:1px solid #dce4ef;border-radius:14px;padding:20px;margin:16px 0;box-shadow:0 4px 20px #102d4c0a}.flow{display:flex;gap:8px;flex-wrap:wrap}.step{flex:1;min-width:120px;border:1px solid #d7e2ef;border-radius:10px;padding:12px;background:#f7faff}.step b{display:block;color:#205cb6}button{background:#2459ad;color:white;border:0;border-radius:8px;padding:10px 14px;cursor:pointer;margin:4px}button:hover{background:#173e7e}button:disabled{opacity:.5;cursor:wait}.secondary{background:#557084}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px}.card{border:1px solid #dce4ef;border-radius:10px;overflow:hidden}.card h3{margin:0;padding:12px;background:#f4f8fe}.card p{padding:0 12px;color:#596b81;font-size:14px}pre{padding:12px;overflow:auto;max-height:300px;font-size:12px;margin:0}#message{min-height:1.4em;color:#a33620}small{color:#5e7189}a{color:#2459ad}</style></head><body><h1>Analytics Playground</h1><p class="intro">架空のECデータを使い、ELTの各段階で何が変わるかを確認します。</p><div class="panel"><h2>データの流れ</h2><div class="flow"><div class="step"><b>1 業務DB</b>注文を保存</div><div class="step"><b>2 レイク</b>抽出結果を残す</div><div class="step"><b>3 raw</b>加工せずDBへ</div><div class="step"><b>4 DWH</b>明細を整理</div><div class="step"><b>5 マート</b>日別に集計</div><div class="step"><b>6 BI</b>グラフを見る</div></div><p>バッチ: <code id="batch">未抽出</code></p><button data-stage="seed" class="secondary">サンプルデータを追加</button><button data-stage="extract">1 抽出</button><button data-stage="load">2 rawを全件更新</button><button data-stage="load-diff">2 rawを差分更新</button><button data-stage="warehouse">3 DWHを更新</button><button data-stage="marts">4 マートを更新</button><button data-stage="all">すべて実行</button><button id="refresh" class="secondary">再読込</button><p id="message" role="status"></p></div><div class="panel"><h2>期間指定で再集計</h2><p>日本時間の日単位で売上を更新します。月別集計は指定期間に重なる月全体を更新します。DWH更新後に実行してください。</p><label>開始 <input type="date" id="from" value="2026-10-01"></label> <label>終了 <input type="date" id="to" value="2026-10-31"></label> <button id="range">再集計</button><p>差分更新は最新の全件スナップショットとrawを比較します。業務DBからレイクへの抽出は全件です。</p></div><div class="panel"><h2>返品を追加してみる</h2><p>注文2の商品を返品します。業務DBに追加した後、各ステップを順に実行し、マートに反映されるまでの変化を見てください。返品は返品完了日に計上されます。</p><button id="return" class="secondary">注文2の返品を追加</button> <small>同じ返品は重複追加されません。</small></div><div class="panel"><h2>注文の追跡</h2><p>注文IDを指定すると、業務DB・レイク・raw・DWH・日別売上を比較します。日別売上には他の注文も含まれます。</p><label>注文ID <input type="number" id="order-id" min="1" value="1"></label> <button id="trace">追跡</button><pre id="trace-result">IDを指定して追跡を押してください。</pre></div><div class="panel"><h2>実行履歴</h2><pre id="history">履歴なし</pre></div><div class="panel"><h2>各レイヤーの中身</h2><p>各データは現在保存されている値です。段階を実行しない限り、後続の表示は更新されません。</p><div id="cards" class="grid"></div></div><div class="panel"><h2>Metabaseで分析</h2><p><a href="http://localhost:3000" target="_blank" rel="noreferrer">Metabaseを開く ↗</a>。初回設定後、PostgreSQLの接続先をホスト <code>analytics</code>、DB <code>analytics</code>、ユーザー <code>postgres</code>、パスワード <code>playground</code> として追加します。<code>mart.daily_sales</code>から折れ線グラフを作成できます。</p></div><script>
-const labels={source:['業務DB','注文と明細。返品は別テーブルに保存。'],lake:['レイク','最新バッチの注文JSON。抽出後は変更されません。'],raw:['raw','抽出データをJSONのまま格納。'],warehouse:['DWH','注文と明細を結合した、明細単位のデータ。'],marts:['マート：日別売上','売上日・返品日ごとの売上、返品額、差引額。'],monthly:['マート：月別リピート率','その月に2回以上購入した顧客の割合。'],products:['マート：商品別','購入時点の金額による日別・商品別売上。']};const $=s=>document.querySelector(s);async function refresh(){const res=await fetch('/api/status');const data=await res.json();$('#batch').textContent=data.batch||'未抽出';$('#history').textContent=JSON.stringify(data.history||[],null,2);const root=$('#cards');root.replaceChildren();for(const [key,[name,description]] of Object.entries(labels)){let card=document.createElement('section');card.className='card';let h=document.createElement('h3');h.textContent=name;let p=document.createElement('p');p.textContent=description;let pre=document.createElement('pre');pre.textContent=data[key+'Error']||JSON.stringify(data[key]||[],null,2);card.append(h,p,pre);root.append(card)}}async function post(url){document.querySelectorAll('button').forEach(b=>b.disabled=true);$('#message').textContent='処理中…';try{const r=await fetch(url,{method:'POST'});const t=await r.text();if(!r.ok)throw Error(t);$('#message').textContent='処理が完了しました。';await refresh()}catch(e){$('#message').textContent='エラー: '+e.message}finally{document.querySelectorAll('button').forEach(b=>b.disabled=false)}}document.querySelectorAll('[data-stage]').forEach(b=>b.onclick=()=>post('/api/run?stage='+b.dataset.stage));$('#range').onclick=()=>post('/api/run?stage=marts-range&from='+encodeURIComponent($('#from').value)+'&to='+encodeURIComponent($('#to').value));$('#trace').onclick=async()=>{try{let r=await fetch('/api/trace?order_id='+encodeURIComponent($('#order-id').value));let t=await r.text();if(!r.ok)throw Error(t);$('#trace-result').textContent=JSON.stringify(JSON.parse(t),null,2)}catch(e){$('#trace-result').textContent='エラー: '+e.message}};$('#return').onclick=()=>post('/api/return');$('#refresh').onclick=()=>refresh();refresh().catch(e=>$('#message').textContent=e.message);
-</script></body></html>
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Analytics Playground</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#18263b;background:#f2f5fa}body{max-width:1200px;margin:auto;padding:32px 20px}h1{font-size:2rem;margin-bottom:4px}.intro{color:#596b81}.panel{background:white;border:1px solid #dce4ef;border-radius:14px;padding:20px;margin:16px 0;box-shadow:0 4px 20px #102d4c0a}.flow{display:flex;gap:8px;flex-wrap:wrap}.step{flex:1;min-width:120px;border:1px solid #d7e2ef;border-radius:10px;padding:12px;background:#f7faff}.step b{display:block;color:#205cb6}button{background:#2459ad;color:white;border:0;border-radius:8px;padding:10px 14px;cursor:pointer;margin:4px}button:hover{background:#173e7e}button:disabled{opacity:.5;cursor:wait}.secondary{background:#557084}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px}.card{border:1px solid #dce4ef;border-radius:10px;overflow:hidden}.card h3{margin:0;padding:12px;background:#f4f8fe}.card p{padding:0 12px;color:#596b81;font-size:14px}pre{padding:12px;overflow:auto;max-height:300px;font-size:12px;margin:0}#message{min-height:1.4em;color:#a33620}small{color:#5e7189}a{color:#2459ad}</style>
+</head>
+<body>
+<h1>Analytics Playground</h1>
+<p class="intro">架空のECデータを使い、ELTの各段階で何が変わるかを確認します。</p>
+<div class="panel">
+<h2>データの流れ</h2>
+<div class="flow">
+<div class="step">
+<b>1 業務DB</b>注文を保存</div>
+<div class="step">
+<b>2 レイク</b>抽出結果を残す</div>
+<div class="step">
+<b>3 raw</b>加工せずDBへ</div>
+<div class="step">
+<b>4 DWH</b>明細を整理</div>
+<div class="step">
+<b>5 マート</b>日別に集計</div>
+<div class="step">
+<b>6 BI</b>グラフを見る</div>
+</div>
+<p>バッチ: <code id="batch">未抽出</code>
+</p>
+<button data-stage="seed" class="secondary">サンプルデータを追加</button>
+<button data-stage="extract">1 抽出</button>
+<button data-stage="load">2 rawを全件更新</button>
+<button data-stage="load-diff">2 rawを差分更新</button>
+<button data-stage="warehouse">3 DWHを更新</button>
+<button data-stage="marts">4 マートを更新</button>
+<button data-stage="all">すべて実行</button>
+<button id="refresh" class="secondary">再読込</button>
+<p id="message" role="status">
+</p>
+</div>
+<div class="panel">
+<h2>期間指定で再集計</h2>
+<p>日本時間の日単位で売上を更新します。月別集計は指定期間に重なる月全体を更新します。DWH更新後に実行してください。</p>
+<label>開始 <input type="date" id="from" value="2026-10-01">
+</label> <label>終了 <input type="date" id="to" value="2026-10-31">
+</label> <button id="range">再集計</button>
+<p>差分更新は最新の全件スナップショットとrawを比較します。業務DBからレイクへの抽出は全件です。</p>
+</div>
+<div class="panel">
+<h2>返品を追加してみる</h2>
+<p>注文2の商品を返品します。業務DBに追加した後、各ステップを順に実行し、マートに反映されるまでの変化を見てください。返品は返品完了日に計上されます。</p>
+<button id="return" class="secondary">注文2の返品を追加</button> <small>同じ返品は重複追加されません。</small>
+</div>
+<div class="panel">
+<h2>注文の追跡</h2>
+<p>注文IDを指定すると、業務DB・レイク・raw・DWH・日別売上を比較します。日別売上には他の注文も含まれます。</p>
+<label>注文ID <input type="number" id="order-id" min="1" value="1">
+</label> <button id="trace">追跡</button>
+<pre id="trace-result">IDを指定して追跡を押してください。</pre>
+</div>
+<div class="panel">
+<h2>実行履歴</h2>
+<pre id="history">履歴なし</pre>
+</div>
+<div class="panel">
+<h2>各レイヤーの中身</h2>
+<p>各データは現在保存されている値です。段階を実行しない限り、後続の表示は更新されません。</p>
+<p id="preview-note">
+</p>
+<div id="cards" class="grid">
+</div>
+</div>
+<div class="panel">
+<h2>Metabaseで分析</h2>
+<p>
+<a href="http://localhost:3000" target="_blank" rel="noreferrer">Metabaseを開く ↗</a>。初回設定後、PostgreSQLの接続先をホスト <code>analytics</code>、DB <code>analytics</code>、ユーザー <code>postgres</code>、パスワード <code>playground</code> として追加します。<code>mart.daily_sales</code>から折れ線グラフを作成できます。</p>
+</div>
+<script>
+const labels={source:['業務DB','注文と明細。返品は別テーブルに保存。'],lake:['レイク','最新バッチの注文JSON。抽出後は変更されません。'],raw:['raw','抽出データをJSONのまま格納。'],warehouse:['DWH','注文と明細を結合した、明細単位のデータ。'],marts:['マート：日別売上','売上日・返品日ごとの売上、返品額、差引額。'],monthly:['マート：月別リピート率','その月に2回以上購入した顧客の割合。'],products:['マート：商品別','購入時点の金額による日別・商品別売上。']};const $=s=>document.querySelector(s);async function refresh(){const res=await fetch('/api/status');const data=await res.json();$('#batch').textContent=data.batch||'未抽出';$('#preview-note').textContent=data.preview_note||'';$('#history').textContent=JSON.stringify(data.history||[],null,2);const root=$('#cards');root.replaceChildren();for(const [key,[name,description]] of Object.entries(labels)){let card=document.createElement('section');card.className='card';let h=document.createElement('h3');h.textContent=name;let p=document.createElement('p');p.textContent=description;let pre=document.createElement('pre');pre.textContent=data[key+'Error']||JSON.stringify(data[key]||[],null,2);card.append(h,p,pre);root.append(card)}}async function post(url){document.querySelectorAll('button').forEach(b=>b.disabled=true);$('#message').textContent='処理中…';try{const r=await fetch(url,{method:'POST'});const t=await r.text();if(!r.ok)throw Error(t);$('#message').textContent='処理が完了しました。';await refresh()}catch(e){$('#message').textContent='エラー: '+e.message}finally{document.querySelectorAll('button').forEach(b=>b.disabled=false)}}document.querySelectorAll('[data-stage]').forEach(b=>b.onclick=()=>post('/api/run?stage='+b.dataset.stage));$('#range').onclick=()=>post('/api/run?stage=marts-range&from='+encodeURIComponent($('#from').value)+'&to='+encodeURIComponent($('#to').value));$('#trace').onclick=async()=>{try{let r=await fetch('/api/trace?order_id='+encodeURIComponent($('#order-id').value));let t=await r.text();if(!r.ok)throw Error(t);$('#trace-result').textContent=JSON.stringify(JSON.parse(t),null,2)}catch(e){$('#trace-result').textContent='エラー: '+e.message}};$('#return').onclick=()=>post('/api/return');$('#refresh').onclick=()=>refresh();refresh().catch(e=>$('#message').textContent=e.message);
+</script>
+</body>
+</html>
