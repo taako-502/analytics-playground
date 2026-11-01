@@ -1,0 +1,10 @@
+CREATE TABLE customers (id bigint PRIMARY KEY, name text NOT NULL);
+CREATE TABLE products (id bigint PRIMARY KEY, name text NOT NULL, category text NOT NULL);
+CREATE TABLE orders (id bigint PRIMARY KEY, customer_id bigint NOT NULL REFERENCES customers, paid_at timestamptz NOT NULL);
+CREATE TABLE order_items (id bigint PRIMARY KEY, order_id bigint NOT NULL REFERENCES orders, product_id bigint NOT NULL REFERENCES products, quantity integer NOT NULL CHECK(quantity > 0), unit_price integer NOT NULL CHECK(unit_price >= 0));
+CREATE TABLE returns (id bigint PRIMARY KEY, order_item_id bigint NOT NULL REFERENCES order_items, quantity integer NOT NULL CHECK(quantity > 0), returned_at timestamptz NOT NULL);
+INSERT INTO customers VALUES (1,'顧客A'),(2,'顧客B');
+INSERT INTO products VALUES (1,'コーヒー','食品'),(2,'マグカップ','雑貨');
+INSERT INTO orders VALUES (1,1,'2026-10-01 12:00+09'),(2,2,'2026-10-02 12:00+09');
+INSERT INTO order_items VALUES (1,1,1,2,500),(2,2,2,1,1200);
+INSERT INTO returns VALUES (1,1,1,'2026-10-03 12:00+09');
