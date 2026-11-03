@@ -82,15 +82,26 @@ func (c *Client) CreateDashboard(db int) (int, error) {
 	if e = c.Request("POST", "/api/dashboard", map[string]string{"name": "EC売上分析", "description": "Analytics Playground"}, &dashboard); e != nil {
 		return 0, e
 	}
-	specs := [][3]string{{"日別売上と返品", "line", "SELECT day, gross_sales, returns, net_sales FROM mart.daily_sales ORDER BY day"}, {"商品別売上", "bar", "SELECT product_name, SUM(gross_sales) AS sales FROM mart.daily_product_sales GROUP BY product_name ORDER BY sales DESC"}, {"月別リピート率", "line", "SELECT month, repeat_rate FROM mart.monthly_customer_activity ORDER BY month"}}
+	specs := []struct {
+		name, display, query, dimension, axis string
+		metrics                               []string
+	}{
+		{"日別売上と返品", "line", `SELECT day AS "日付", gross_sales AS "売上", net_sales AS "純売上", returns AS "返品" FROM mart.daily_sales ORDER BY day`, "日付", "金額（円）", []string{"売上", "純売上", "返品"}},
+		{"商品別売上 TOP 10", "bar", `SELECT product_name AS "商品", SUM(gross_sales) AS "売上" FROM mart.daily_product_sales GROUP BY product_id,product_name ORDER BY SUM(gross_sales) DESC,product_id LIMIT 10`, "商品", "売上（円・返品控除前）", []string{"売上"}},
+		{"月別リピート率", "line", `SELECT month AS "月", repeat_rate * 100 AS "リピート率（%）" FROM mart.monthly_customer_activity ORDER BY month`, "月", "リピート率（%）", []string{"リピート率（%）"}},
+	}
 	var layout []map[string]any
 	for i, s := range specs {
 		var card struct{ ID int }
-		e = c.Request("POST", "/api/card", map[string]any{"name": s[0], "display": s[1], "visualization_settings": map[string]any{}, "dataset_query": map[string]any{"database": db, "type": "native", "native": map[string]string{"query": s[2]}}}, &card)
+		e = c.Request("POST", "/api/card", map[string]any{"name": s.name, "display": s.display, "visualization_settings": map[string]any{"graph.dimensions": []string{s.dimension}, "graph.metrics": s.metrics, "graph.y_axis.title_text": s.axis, "graph.x_axis.title_text": s.dimension, "graph.show_values": i == 2}, "dataset_query": map[string]any{"database": db, "type": "native", "native": map[string]string{"query": s.query}}}, &card)
 		if e != nil {
 			return 0, e
 		}
-		layout = append(layout, map[string]any{"id": -(i + 1), "card_id": card.ID, "row": (i / 2) * 7, "col": (i % 2) * 12, "size_x": 12, "size_y": 7})
+		row, col, width := 0, 0, 24
+		if i > 0 {
+			row, col, width = 8, (i-1)*12, 12
+		}
+		layout = append(layout, map[string]any{"id": -(i + 1), "card_id": card.ID, "row": row, "col": col, "size_x": width, "size_y": 8})
 	}
 	e = c.Request("PUT", fmt.Sprintf("/api/dashboard/%d", dashboard.ID), map[string]any{"dashcards": layout}, nil)
 	return dashboard.ID, e

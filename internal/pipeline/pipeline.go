@@ -203,6 +203,11 @@ func Status() (map[string]any, error) {
 		}
 	}
 	queries := map[string]struct{ db, q string }{"source": {source(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT o.id,o.customer_id,o.paid_at,i.product_id,i.quantity,i.unit_price FROM orders o JOIN order_items i ON i.order_id=o.id ORDER BY o.id LIMIT 30)t`}, "raw": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT batch_id,source_table,payload FROM raw.records ORDER BY source_table LIMIT 30)t`}, "warehouse": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM dwh.fact_order_items ORDER BY id LIMIT 30)t`}, "marts": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.daily_sales ORDER BY day DESC LIMIT 1000)t`}, "monthly": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.monthly_customer_activity ORDER BY month DESC LIMIT 1000)t`}, "products": {analytics(), `SELECT coalesce(json_agg(row_to_json(t)),'[]'::json) FROM (SELECT * FROM mart.daily_product_sales ORDER BY day DESC LIMIT 1000)t`}}
+	// グラフ用データはプレビューの行数制限を適用せず、マート全体から取得する。
+	queries["chartDaily"] = struct{ db, q string }{analytics(), `SELECT coalesce(json_agg(t),'[]'::json) FROM (SELECT * FROM mart.daily_sales ORDER BY day)t`}
+	queries["chartProducts"] = struct{ db, q string }{analytics(), `SELECT coalesce(json_agg(t),'[]'::json) FROM (SELECT product_id,product_name,sum(gross_sales) AS sales FROM mart.daily_product_sales GROUP BY product_id,product_name ORDER BY sales DESC,product_id LIMIT 10)t`}
+	queries["chartMonthly"] = struct{ db, q string }{analytics(), `SELECT coalesce(json_agg(t),'[]'::json) FROM (SELECT * FROM mart.monthly_customer_activity ORDER BY month)t`}
+
 	for k, v := range queries {
 		x, e := queryJSON(v.db, v.q)
 		if e != nil {

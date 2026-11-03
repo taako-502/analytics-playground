@@ -5,11 +5,19 @@ package tests
 import (
 	"analytics-playground/internal/metabase"
 	"fmt"
+	"os"
 	"os/exec"
 	"reflect"
 	"testing"
 	"time"
 )
+
+func endpoint(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
 
 type obj = map[string]any
 
@@ -30,7 +38,7 @@ func wait(t *testing.T, c *metabase.Client, path string, attempts int) {
 	t.Fatal("service not ready")
 }
 func TestPipeline(t *testing.T) {
-	c := &metabase.Client{URL: "http://localhost:8080"}
+	c := &metabase.Client{URL: endpoint("TEST_APP_URL", "http://localhost:8080")}
 	wait(t, c, "/api/status", 60)
 	post := func(p string) { call(t, c, "POST", p, nil, nil) }
 	get := func(p string) obj { var v obj; call(t, c, "GET", p, nil, &v); return v }
@@ -46,6 +54,16 @@ func TestPipeline(t *testing.T) {
 	stage("all")
 	s := get("/api/status")
 	v := sales(s)
+	if len(s["chartDaily"].([]any)) != len(s["marts"].([]any)) {
+		t.Fatal("chart daily rows mismatch")
+	}
+	var chartSales float64
+	for _, row := range s["chartProducts"].([]any) {
+		chartSales += row.(map[string]any)["sales"].(float64)
+	}
+	if chartSales != 2200 {
+		t.Fatalf("chart product sales = %v", chartSales)
+	}
 	if v["2026-10-01"]["gross_sales"] != float64(1000) || v["2026-10-02"]["gross_sales"] != float64(1200) || v["2026-10-03"]["returns"] != float64(500) {
 		t.Fatal(v)
 	}
@@ -104,10 +122,10 @@ func TestPipeline(t *testing.T) {
 	}
 }
 func TestMetabase(t *testing.T) {
-	app := &metabase.Client{URL: "http://localhost:8080"}
+	app := &metabase.Client{URL: endpoint("TEST_APP_URL", "http://localhost:8080")}
 	wait(t, app, "/api/status", 60)
 	call(t, app, "POST", "/api/run?stage=all", nil, nil)
-	c := &metabase.Client{URL: "http://localhost:3000"}
+	c := &metabase.Client{URL: endpoint("TEST_METABASE_URL", "http://localhost:3000")}
 	wait(t, c, "/api/health", 120)
 	var props obj
 	call(t, c, "GET", "/api/session/properties", nil, &props)
