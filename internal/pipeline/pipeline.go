@@ -82,7 +82,7 @@ func extract() error {
 			return e
 		}
 	}
-	if e = os.WriteFile(filepath.Join(tmp, "manifest.json"), []byte(fmt.Sprintf(`{"batch_id":%q,"extracted_at":%q}`, id, time.Now().UTC().Format(time.RFC3339Nano))), 0644); e != nil {
+	if e = os.WriteFile(filepath.Join(tmp, "manifest.json"), fmt.Appendf(nil, `{"batch_id":%q,"extracted_at":%q}`, id, time.Now().UTC().Format(time.RFC3339Nano)), 0644); e != nil {
 		return e
 	}
 	return os.Rename(tmp, filepath.Join(lake(), id))
