@@ -110,3 +110,7 @@ WebサーバーをDocker外で起動する場合は、Go 1.27以降と `psql` �
 `go test ./...` は通常テストです。結合テストは新規のDockerボリュームで、`go test -tags=integration ./tests -run ^TestPipeline$ -v` を実行します。Metabaseの初期化テストは `-run ^TestMetabase$` で別途実行します。既存データには実行しないでください。Pythonは不要です。対話ツールのパスワード非表示入力にはmacOS/Linuxのsttyを使用します。
 
 グラフ描画の回帰テストはNode.js 22以降で `node --test tests/report.test.cjs` を実行します。結合テストの接続先は `TEST_APP_URL`、`TEST_METABASE_URL` で変更できます。分離環境では `COMPOSE_FILE` もその環境の設定に揃えてください。
+
+
+## 記事
+https://ap-ep.com/go-postgresql-metabase-analytics-pipeline/
